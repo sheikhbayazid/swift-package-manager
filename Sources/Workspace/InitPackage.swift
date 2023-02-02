@@ -45,7 +45,7 @@ public final class InitPackage {
         case executable = "executable"
         case systemModule = "system-module"
         case manifest = "manifest"
-        case `extension` = "extension"
+        case commandPlugin = "command-plugin"
 
         public var description: String {
             return rawValue
@@ -121,6 +121,7 @@ public final class InitPackage {
 
         try writeREADMEFile()
         try writeGitIgnore()
+        try writePlugins()
         try writeSources()
         try writeModuleMap()
         try writeTests()
@@ -195,7 +196,7 @@ public final class InitPackage {
                     ]
                 """)
 
-            if packageType == .library || packageType == .executable || packageType == .manifest {
+            if packageType == .library || packageType == .executable || packageType == .manifest || packageType == .commandPlugin {
                 var param = ""
 
                 param += """
@@ -204,24 +205,35 @@ public final class InitPackage {
                         // Targets can depend on other targets in this package, and on products in packages this package depends on.
 
                 """
-                if packageType == .executable {
+
+                if packageType == .commandPlugin {
                     param += """
-                            .executableTarget(
+                            .plugin(
+                                name: "\(typeName)",
+                                capability: .command(intent: .custom(verb: "\(typeName)", description: "prints hello world"))
+                            ),
+                        ]
                     """
                 } else {
+                    if packageType == .executable {
+                        param += """
+                                .executableTarget(
+                        """
+                    } else {
+                        param += """
+                                .target(
+                        """
+                    }
                     param += """
-                            .target(
+
+                                name: "\(pkgname)",
+                                dependencies: []),
+                            .testTarget(
+                                name: "\(pkgname)Tests",
+                                dependencies: ["\(pkgname)"]),
+                        ]
                     """
                 }
-                param += """
-
-                            name: "\(pkgname)",
-                            dependencies: []),
-                        .testTarget(
-                            name: "\(pkgname)Tests",
-                            dependencies: ["\(pkgname)"]),
-                    ]
-                """
 
                 pkgParams.append(param)
             }
@@ -280,8 +292,44 @@ public final class InitPackage {
         }
     }
 
+    private func writePlugins() throws {
+        switch packageType {
+        case .commandPlugin:
+            let plugins = destinationPath.appending(component: "Plugins")
+            guard self.fileSystem.exists(plugins) == false else {
+                return
+            }
+            progressReporter?("Creating \(plugins.relative(to: destinationPath))/")
+            try makeDirectories(plugins)
+
+            let moduleDir = plugins.appending(component: "\(pkgname)")
+            try makeDirectories(moduleDir)
+
+            let sourceFileName = "\(typeName).swift"
+            let sourceFile = try AbsolutePath(validating: sourceFileName, relativeTo: moduleDir)
+
+            let content = """
+                import PackagePlugin
+
+                @main
+                struct \(typeName): CommandPlugin {
+                    func performCommand(context: PluginContext, arguments: [String]) async throws {
+                        print("Hello, World!")
+                    }
+                }
+            """
+
+            try writePackageFile(sourceFile) { stream in
+                stream.write(content)
+            }
+
+        case .empty, .library, .executable, .systemModule, .manifest:
+            break
+        }
+    }
+
     private func writeSources() throws {
-        if packageType == .systemModule || packageType == .manifest {
+        if packageType == .systemModule || packageType == .manifest || packageType == .commandPlugin {
             return
         }
         let sources = destinationPath.appending(component: "Sources")
@@ -325,7 +373,7 @@ public final class InitPackage {
                 }
 
                 """
-        case .systemModule, .empty, .manifest, .`extension`:
+        case .systemModule, .empty, .manifest, .commandPlugin:
             throw InternalError("invalid packageType \(packageType)")
         }
 
@@ -356,7 +404,7 @@ public final class InitPackage {
     }
 
     private func writeTests() throws {
-        if packageType == .systemModule {
+        if packageType == .systemModule || packageType == .commandPlugin {
             return
         }
         let tests = destinationPath.appending(component: "Tests")
@@ -367,7 +415,7 @@ public final class InitPackage {
         try makeDirectories(tests)
 
         switch packageType {
-        case .systemModule, .empty, .manifest, .`extension`: break
+        case .systemModule, .empty, .manifest, .commandPlugin: break
         case .library, .executable:
             try writeTestFileStubs(testsPath: tests)
         }
@@ -418,7 +466,7 @@ public final class InitPackage {
 
         let testClassFile = try AbsolutePath(validating: "\(moduleName)Tests.swift", relativeTo: testModule)
         switch packageType {
-        case .systemModule, .empty, .manifest, .`extension`: break
+        case .systemModule, .empty, .manifest, .commandPlugin: break
         case .library:
             try writeLibraryTestsFile(testClassFile)
         case .executable:

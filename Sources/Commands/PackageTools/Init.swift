@@ -25,12 +25,13 @@ extension SwiftPackageTool {
         
         @Option(
             name: .customLong("type"),
-            help: ArgumentHelp("Package type: empty | library | executable | system-module | manifest", discussion: """
+            help: ArgumentHelp("Package type: empty | library | executable | system-module | manifest | command-plugin", discussion: """
                 empty - Create an empty package
                 library - Create a package that contains a library
                 executable - Create a package that contains a binary executable
                 system-module - Create a package that contains a system module
                 manifest - Create a Package.swift file
+                command-plugin - Create a package that contains a command plugin
                 """))
         var initMode: InitPackage.PackageType = .library
 
