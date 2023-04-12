@@ -21,17 +21,19 @@
   - [4.4. Download source archive](#44-download-source-archive)
     - [4.4.1. Integrity verification](#441-integrity-verification)
     - [4.4.2. Download locations](#442-download-locations)
+    - [4.4.3. Signature validation](#443-signature-validation)
   - [4.5. Lookup package identifiers registered for a URL](#45-lookup-package-identifiers-registered-for-a-url)
+    - [4.5.1 URL to package identifier mappings](#451-url-to-package-identifier-mappings)
   - [4.6. Create a package release](#46-create-a-package-release)
     - [4.6.1. Source archive](#461-source-archive)
     - [4.6.2. Package release metadata](#462-package-release-metadata)
-      - [4.6.2.1. Reserved metadata keys](#4621-reserved-metadata-keys)
     - [4.6.3. Synchronous and asynchronous publication](#463-synchronous-and-asynchronous-publication)
       - [4.6.3.1. Synchronous publication](#4631-synchronous-publication)
       - [4.6.3.2. Asynchronous publication](#4632-asynchronous-publication)
 - [5. Normative References](#5-normative-references)
 - [6. Informative References](#6-informative-references)
 - [Appendix A - OpenAPI Document](#appendix-a---openapi-document)
+- [Appendix B - Package Release Metadata JSON Schema](#appendix-b---package-release-metadata-json-schema)
 
 ## 1. Notations
 
@@ -458,21 +460,27 @@ Link: <https://packages.example.com/mona/LinkedList/1.1.1>; rel="latest-version"
     {
       "name": "source-archive",
       "type": "application/zip",
-      "checksum": "a2ac54cf25fbc1ad0028f03f0aa4b96833b83bb05a14e510892bb27dea4dc812"
+      "checksum": "a2ac54cf25fbc1ad0028f03f0aa4b96833b83bb05a14e510892bb27dea4dc812",
+      "signing": {
+        "signatureBase64Encoded": "l1TdTeIuGdNsO1FQ0ptD64F5nSSOsQ5WzhM6/7KsHRuLHfTsggnyIWr0DxMcBj5F40zfplwntXAgS0ynlqvlFw==",
+        "signatureFormat": "cms-1.0.0"
+      }
     }
   ],
-  "metadata": { ... }
+  "metadata": { ... },
+  "publishedAt": "2023-02-16T04:00:00.000Z"
 }
 ```
 
-The response body MUST contain a JSON object containing the following fields:
+The response body SHOULD contain a JSON object containing the following fields:
 
-| Key         | Type   | Description                               |
-| ----------- | ------ | ----------------------------------------- |
-| `id`        | String | The namespaced package identifier.        |
-| `version`   | String | The package release version number.       |
-| `resources` | Array  | The resources available for the release.  |
-| `metadata`  | Object | Additional information about the release. |
+| Key           | Type   | Description                               | Required |
+| ------------- | ------ | ----------------------------------------- | :------: |
+| `id`          | String | The namespaced package identifier.        | ✓ |
+| `version`     | String | The package release version number.       | ✓ |
+| `resources`   | Array  | The resources available for the release.  | ✓ |
+| `metadata`    | Object | Additional information about the release. | ✓ |
+| `publishedAt` | String | The [ISO 8601]-formatted datetime string of when the package release was published, as recorded by the registry. See related [`originalPublicationTime`](#appendix-b---package-release-metadata-json-schema) in `metadata`. | |
 
 A server SHOULD respond with a `Link` header containing the following entries:
 
@@ -489,11 +497,19 @@ MAY correspond to the requested release.
 
 Each element in the `resources` array is a JSON object with the following keys:
 
-| Key        | Type    | Description                                                         |
-| ---------- | ------- | ------------------------------------------------------------------- |
-| `name`     | String  | The name of the resource.                                           |
-| `type`     | String  | The content type of the resource.                                   |
-| `checksum` | String  | A hexadecimal representation of the SHA256 digest for the resource. |
+| Key        | Type    | Description                                                                |
+| ---------- | ------- | -------------------------------------------------------------------------- |
+| `name`     | String  | The name of the resource.                                                  |
+| `type`     | String  | The content type of the resource.                                          |
+| `checksum` | String  | A hexadecimal representation of the SHA256 digest for the resource.        |
+| `signing`  | Object  | Information about the signature. Required only if the resource is signed.  |
+
+The `signing` JSON object contains these keys:
+
+| Key                      | Type    | Description                                       |
+| ------------------------ | ------- | ------------------------------------------------- |
+| `signatureBase64Encoded` | String  | The resource's signature, base64 encoded.         |
+| `signatureFormat`        | String  | The signature format. (e.g., `cms-1.0.0`)         |
 
 A resource object SHOULD have one of the following combinations of
 `name` and `type` values:
@@ -507,41 +523,13 @@ with a given combination of `name` and `type` values.
 
 #### 4.2.2. Package release metadata standards
 
-A server MAY include metadata in its package release response.
-It is RECOMMENDED that package metadata be represented in [JSON-LD]
-according to a structured data standard.
-For example,
-this response using the [Schema.org] [SoftwareSourceCode] vocabulary:
-
-```jsonc
-{
-  "id": "mona.LinkedList",
-  "version": "1.1.1",
-  "resources": [ ... ],
-  "metadata": {
-    "@context": ["http://schema.org/"],
-    "@type": "SoftwareSourceCode",
-    "name": "LinkedList",
-    "description": "One thing links to another.",
-    "keywords": ["data-structure", "collection"],
-    "version": "1.1.1",
-    "codeRepository": "https://github.com/mona/LinkedList",
-    "license": "https://www.apache.org/licenses/LICENSE-2.0",
-    "programmingLanguage": {
-      "@type": "ComputerLanguage",
-      "name": "Swift",
-      "url": "https://swift.org"
-    },
-    "author": {
-        "@type": "Person",
-        "@id": "https://example.com/mona",
-        "givenName": "Mona",
-        "middleName": "Lisa",
-        "familyName": "Octocat"
-    }
-  }
-}
-```
+[Appendix B](#appendix-b---package-release-metadata-json-schema) 
+defines the JSON schema for package release metadata that
+gets submitted as part of the ["create a package release"](#endpoint-6)
+request. A server MAY allow and/or populate additional metadata by 
+expanding the schema. The `metadata` key in the 
+["fetch information about a package release "](#endpoint-2) API response
+will hold the user-provided as well as the server populated metadata.
 
 <a name="endpoint-3"></a>
 
@@ -704,6 +692,8 @@ Content-Length: 2048
 Content-Version: 1
 Digest: sha-256=oqxUzyX7wa0AKPA/CqS5aDO4O7BaFOUQiSuyfepNyBI=
 Link: <https://mirror-japanwest.example.com/mona-LinkedList-1.1.1.zip>; rel=duplicate; geo=jp; pri=10; type="application/zip"
+X-Swift-Package-Signature-Format: cms-1.0.0
+X-Swift-Package-Signature: l1TdTeIuGdNsO1FQ0ptD64F5nSSOsQ5WzhM6/7KsHRuLHfTsggnyIWr0DxMcBj5F40zfplwntXAgS0ynlqvlFw==
 ```
 
 A server MUST respond with a `Content-Length` header
@@ -726,6 +716,10 @@ change across different API versions.
 It is RECOMMENDED for clients and servers to support
 range requests as described by [RFC 7233]
 and caching as described by [RFC 7234].
+
+If a release is signed, a server MUST include 
+`X-Swift-Package-Signature-Format` and `X-Swift-Package-Signature`
+headers in the response.
 
 #### 4.4.1. Integrity verification
 
@@ -779,6 +773,14 @@ Content-Version: 1
 Digest: sha-256=a2ac54cf25fbc1ad0028f03f0aa4b96833b83bb05a14e510892bb27dea4dc812
 ```
 
+#### 4.4.3. Signature validation
+
+A client MUST validate the signature of a signed archive
+according to the signature format and configuration. Signing
+information can alternatively be found in the associated 
+`source-archive` resource in the response to `GET /{scope}/{name}/{version}`,
+as described in [4.2.1](#421-package-release-resources).
+
 <a name="endpoint-5"></a>
 
 ### 4.5. Lookup package identifiers registered for a URL
@@ -825,6 +827,20 @@ nested at a top-level `identifiers` key.
 It is RECOMMENDED for clients and servers to support
 caching as described by [RFC 7234].
 
+#### 4.5.1 URL to package identifier mappings
+
+As part of the [package release metadata](#422-package-release-metadata-standards)
+JSON object, the `repositoryURLs` array can be used to specify 
+URLs associated with a package identifier. This is one way 
+through which a server can obtain URL to package identifier 
+mappings for this API. 
+
+A server MAY choose other mechanism(s) for package authors 
+to specify these mappings.
+
+A server SHOULD validate the package author's ownership claim
+on the corresponding repository.
+
 <a name="endpoint-6"></a>
 
 ### 4.6. Create a package release
@@ -836,10 +852,12 @@ to publish a release of a package.
 A client MUST provide a body encoded as multipart form data
 with the following sections:
 
-| Key               | Content-Type       | Description                               | Requirement Level |
-| ----------------- | ------------------ | ----------------------------------------- | ----------------- |
-| `source-archive`  | `application/zip`  | The source archive of the package.        | REQUIRED          |
-| `metadata`        | `application/json` | Additional information about the release. | OPTIONAL          |
+| Key                        | Content-Type               | Description                               | Requirement Level |
+| -------------------------- | -------------------------- | ----------------------------------------- | ----------------- |
+| `source-archive`           | `application/zip`          | The source archive of the package.        | REQUIRED          |
+| `source-archive-signature` | `application/octet-stream` | The signature of the source archive.      | OPTIONAL          |
+| `metadata`                 | `application/json`         | Additional information about the release. | OPTIONAL          |
+| `metadata-signature`       | `application/octet-stream` | The signature of the metadata.            | OPTIONAL          |
 
 A client MUST set a `Content-Type` header with the value 
 `multipart/form-data`. `boundary` can be any string.
@@ -853,6 +871,9 @@ the total size of the body in bytes.
 A client SHOULD set the `Accept` header with the value
 `application/vnd.swift.registry.v1+json`.
 
+A client MUST set a `X-Swift-Package-Signature-Format` header 
+with the signature format if the source archive is signed.
+
 ```http
 PUT /mona/LinkedList/1.1.1 HTTP/1.1
 Host: packages.example.com
@@ -860,6 +881,7 @@ Accept: application/vnd.swift.registry.v1+json
 Content-Type: multipart/form-data;boundary="boundary"
 Content-Length: 336
 Expect: 100-continue
+X-Swift-Package-Signature-Format: cms-1.0.0
 
 --boundary
 Content-Disposition: form-data; name="source-archive"
@@ -870,12 +892,28 @@ Content-Transfer-Encoding: base64
 gHUFBgAAAAAAAAAAAAAAAAAAAAAAAA==
 
 --boundary
+Content-Disposition: form-data; name="source-archive-signature"
+Content-Type: application/octet-stream
+Content-Length: 88
+Content-Transfer-Encoding: base64
+
+l1TdTeIuGdNsO1FQ0ptD64F5nSSOsQ5WzhM6/7KsHRuLHfTsggnyIWr0DxMcBj5F40zfplwntXAgS0ynlqvlFw==
+
+--boundary
 Content-Disposition: form-data; name="metadata"
 Content-Type: application/json
 Content-Transfer-Encoding: quoted-printable
 Content-Length: 3
 
-{ }
+{ "repositoryURLs": [] }
+
+--boundary
+Content-Disposition: form-data; name="metadata-signature"
+Content-Type: application/octet-stream
+Content-Length: 88
+Content-Transfer-Encoding: base64
+
+M6TdTeIuGdNsO1FQ0ptD64F5nSSOsQ5WzhM6/7KsHRuLHfTsggnyIWr0DxMcBj5F40zfplwntXAgS0ynlqvlFw==
 
 ```
 
@@ -1001,46 +1039,31 @@ A client MAY include a multipart section named `metadata`
 containing additional information about the release.
 A client SHOULD set a `Content-Type` header with the value `application/json`
 and a `Content-Length` header with the size of the JSON document in bytes.
-It is RECOMMENDED that package release metadata be represented in [JSON-LD]
-according to a structured data standard,
-as discussed in [4.2.1](#421-package-release-metadata-data-standards).
+The package release metadata MUST be based on the [JSON schema](#appendix-b---package-release-metadata-json-schema),
+as discussed in [4.2.2](#422-package-release-metadata-standards).
 
 ```http
 --boundary
 Content-Disposition: form-data; name="metadata"
 Content-Type: application/json
-Content-Length: 620
+Content-Length: 226
 Content-Transfer-Encoding: quoted-printable
 
 {
-  "@context": ["http://schema.org/"],
-  "@type": "SoftwareSourceCode",
-  "name": "LinkedList",
   "description": "One thing links to another.",
-  "keywords": ["data-structure", "collection"],
-  "version": "1.1.1",
-  "codeRepository": "https://github.com/mona/LinkedList",
-  "license": "https://www.apache.org/licenses/LICENSE-2.0",
-  "programmingLanguage": {
-    "@type": "ComputerLanguage",
-    "name": "Swift",
-    "url": "https://swift.org"
-  },
+  "repositoryURLs": ["https://github.com/mona/LinkedList"],
+  "licenseURL": "https://www.apache.org/licenses/LICENSE-2.0",
   "author": {
-      "@type": "Person",
-      "@id": "https://github.com/mona",
-      "givenName": "Mona",
-      "middleName": "Lisa",
-      "familyName": "Octocat"
+      "name": "Mona Lisa Octocat"
   }
 }
 
 ```
 
-If a client doesn't provide a `metadata` section,
-a server MAY populate the metadata for a release.
-A client MAY request that a server not populate metadata automatically
-by sending an empty JSON object (`{}`) as its request body.
+A server MAY allow and/or populate additional metadata for a release.
+
+A server MAY make any properties in the [JSON schema](#appendix-b---package-release-metadata-json-schema)
+and additional metadata it defines required.
 
 If a client provides an invalid JSON document,
 the server SHOULD respond with a status code of
@@ -1056,15 +1079,7 @@ Content-Language: en
 {
    "detail": "invalid JSON provided for release metadata"
 }
-```
-
-##### 4.6.2.1. Reserved metadata keys
-
-These metadata keys have special meanings to the server and should be included if and only if their value satisifies their intended use:
-
-| Key               | Description                                          | Server Use                             |
-| ----------------- | ---------------------------------------------------- | -------------------------------------- |
-| `repositoryURLs`  | An array of the package's source code repository URLs (e.g., `["https://github.com/mona/LinkedList", "ssh://git@github.com:mona/LinkedList.git"]`). | The mappings between package identifer and repository URL get recorded for the [lookup package identifiers by URL](#endpoint-5) endpoint. | 
+``` 
 
 #### 4.6.3. Synchronous and asynchronous publication
 
@@ -1695,6 +1710,135 @@ components:
 
 ```
 
+## Appendix B - Package Release Metadata JSON Schema
+
+The `metadata` section of the [create package release request](#46-create-a-package-release) 
+must be a JSON object of type [`PackageRelease`](#packagerelease-type), as defined in the
+JSON schema below.
+
+<details>
+
+<summary>Expand to view <a href="https://json-schema.org/specification.html">JSON schema</a></summary>  
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/apple/swift-package-manager/blob/main/Documentation/Registry.md",
+  "title": "Package Release Metadata",
+  "description": "Metadata of a package release.",
+  "type": "object",
+  "properties": {
+    "author": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",      
+          "description": "Name of the author."
+        },  
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Email address of the author."
+        },              
+        "description": {
+          "type": "string",      
+          "description": "A description of the author."
+        },
+        "organization": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",      
+              "description": "Name of the organization."
+            },  
+            "email": {
+              "type": "string",
+              "format": "email",      
+              "description": "Email address of the organization."
+            },              
+            "description": {
+              "type": "string",      
+              "description": "A description of the organization."
+            },        
+            "url": {
+              "type": "string",
+              "format": "uri",      
+              "description": "URL of the organization."
+            },        
+          },
+          "required": ["name"]
+        },                
+        "url": {
+          "type": "string", 
+          "format": "uri",     
+          "description": "URL of the author."
+        },        
+      },
+      "required": ["name"]
+    },
+    "description": {
+      "type": "string",      
+      "description": "A description of the package release."
+    },
+    "licenseURL": {
+      "type": "string",
+      "format": "uri",
+      "description": "URL of the package release's license document."
+    },
+    "originalPublicationTime": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Original publication time of the package release in ISO 8601 format."
+    },
+    "readmeURL": {
+      "type": "string",
+      "format": "uri",      
+      "description": "URL of the README specifically for the package release or broadly for the package."
+    },
+    "repositoryURLs": {
+      "type": "array",
+      "description": "Code repository URL(s) of the package release.",
+      "items": {
+        "type": "string",
+        "description": "Code repository URL."
+      }      
+    }
+  }
+}
+```
+
+</details>
+
+##### `PackageRelease` type
+
+| Property                  | Type                | Description                                      | Required |
+| ------------------------- | :-----------------: | ------------------------------------------------ | :------: |
+| `author`                  | [Author](#author-type) | Author of the package release. | |
+| `description`             | String | A description of the package release. | |
+| `licenseURL`              | String | URL of the package release's license document. | |
+| `originalPublicationTime` | String | Original publication time of the package release in [ISO 8601] format. This can be set if the package release was previously published elsewhere.<br>A registry should record the publication time independently and include it as `publishedAt` in the [package release metadata response](#42-fetch-information-about-a-package-release). <br>In case both `originalPublicationTime` and `publishedAt` are set, `originalPublicationTime` should be used. | |
+| `readmeURL`       | String | URL of the README specifically for the package release or broadly for the package. | |
+| `repositoryURLs`  | Array | Code repository URL(s) of the package. It is recommended to include all URL variations (e.g., SSH, HTTPS) for the same repository. This can be an empty array if the package does not have source control representation.<br/>Setting this property is one way through which a registry can obtain repository URL to package identifier mappings for the ["lookup package identifiers registered for a URL" API](https://github.com/apple/swift-package-manager/blob/main/Documentation/Registry.md#45-lookup-package-identifiers-registered-for-a-url). A registry may choose other mechanism(s) for package authors to specify such mappings. | |
+
+##### `Author` type
+
+| Property          | Type                | Description                                      | Required |
+| ----------------- | :-----------------: | ------------------------------------------------ | :------: |
+| `name`            | String | Name of the author. | ✓ |
+| `email`           | String | Email address of the author. | |
+| `description`     | String | A description of the author. | |
+| `organization`    | [Organization](#organization-type) | Organization that the author belongs to. | |
+| `url`             | String | URL of the author. | |
+
+##### `Organization` type
+
+| Property          | Type                | Description                                      | Required |
+| ----------------- | :-----------------: | ------------------------------------------------ | :------: |
+| `name`            | String | Name of the organization. | ✓ |
+| `email`           | String | Email address of the organization. | |
+| `description`     | String | A description of the organization. | |
+| `url`             | String | URL of the organization. | |
+
 [BCP 13]: https://tools.ietf.org/html/rfc6838 "Media Type Specifications and Registration Procedures"
 [RFC 2119]: https://tools.ietf.org/html/rfc2119 "Key words for use in RFCs to Indicate Requirement Levels"
 [RFC 3230]: https://tools.ietf.org/html/rfc5843 "Instance Digests in HTTP"
@@ -1734,3 +1878,4 @@ components:
 [XCFramework]: https://developer.apple.com/videos/play/wwdc2019/416/ "WWDC 2019 Session 416: Binary Frameworks in Swift"
 [SE-0272]: https://github.com/apple/swift-evolution/blob/master/proposals/0272-swiftpm-binary-dependencies.md "Package Manager Binary Dependencies"
 [Swift tools version]: https://github.com/apple/swift-package-manager/blob/9b9bed7eaf0f38eeccd0d8ca06ae08f6689d1c3f/Documentation/Usage.md#swift-tools-version-specification "Swift Tools Version Specification"
+[ISO 8601]: https://www.iso.org/iso-8601-date-and-time-format.html "ISO 8601 Date and Time Format"

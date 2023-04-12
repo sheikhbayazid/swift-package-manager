@@ -15,7 +15,7 @@
 
 // MARK: - SigningEntity is the entity that generated the signature
 
-public enum SigningEntity: Hashable, Codable, CustomStringConvertible {
+public enum SigningEntity: Hashable, Codable, CustomStringConvertible, Sendable {
     case recognized(type: SigningEntityType, name: String, organizationalUnit: String, organization: String)
     case unrecognized(name: String?, organizationalUnit: String?, organization: String?)
 
@@ -76,7 +76,7 @@ public enum SigningEntity: Hashable, Codable, CustomStringConvertible {
 
 // MARK: - SigningEntity types that SwiftPM recognizes
 
-public enum SigningEntityType: String, Hashable, Codable {
+public enum SigningEntityType: String, Hashable, Codable, Sendable {
     case adp // Apple Developer Program
 }
 

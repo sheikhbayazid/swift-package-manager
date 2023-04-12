@@ -261,10 +261,52 @@ class PackageGraphTests: XCTestCase {
         }
     }
 
+    func testTargetGroup() throws {
+        let fs = InMemoryFileSystem(emptyFiles:
+            "/libpkg/Sources/ExampleApp/main.swift",
+            "/libpkg/Sources/MainLib/file.swift",
+            "/libpkg/Sources/Core/file.swift",
+            "/libpkg/Tests/MainLibTests/file.swift"
+        )
+
+        let observability = ObservabilitySystem.makeForTesting()
+        let g = try loadPackageGraph(
+            fileSystem: fs,
+            manifests: [
+                Manifest.createRootManifest(
+                    displayName: "libpkg",
+                    path: .init(path: "/libpkg"),
+                    toolsVersion: .vNext,
+                    products: [
+                        ProductDescription(name: "ExampleApp", type: .executable, targets: ["ExampleApp"]),
+                        ProductDescription(name: "Lib", type: .library(.automatic), targets: ["MainLib"])
+                    ],
+                    targets: [
+                        TargetDescription(name: "ExampleApp", group: .excluded, dependencies: ["MainLib"], type: .executable),
+                        TargetDescription(name: "MainLib", group: .package, dependencies: ["Core"]),
+                        TargetDescription(name: "Core"),
+                        TargetDescription(name: "MainLibTests", group: .package, dependencies: ["MainLib"], type: .test),
+                    ]),
+            ],
+            observabilityScope: observability.topScope
+        )
+
+        XCTAssertNoDiagnostics(observability.diagnostics)
+        PackageGraphTester(g) { result in
+            result.check(targets: "ExampleApp", "MainLib", "Core")
+            result.check(testModules: "MainLibTests")
+            result.checkTarget("MainLib") { result in result.check(dependencies: "Core") }
+            result.checkTarget("MainLibTests") { result in result.check(dependencies: "MainLib") }
+            result.checkTarget("ExampleApp") { result in result.check(dependencies: "MainLib") }
+        }
+    }
+
     func testDuplicateModules() throws {
         let fs = InMemoryFileSystem(emptyFiles:
+            "/Foo/Sources/Foo/source.swift",
             "/Foo/Sources/Bar/source.swift",
-            "/Bar/Sources/Bar/source.swift"
+            "/Bar/Sources/Bar/source.swift",
+            "/Bar/Sources/Baz/source.swift"
         )
 
         let observability = ObservabilitySystem.makeForTesting()
@@ -278,6 +320,7 @@ class PackageGraphTests: XCTestCase {
                         .localSourceControl(path: .init(path: "/Bar"), requirement: .upToNextMajor(from: "1.0.0"))
                     ],
                     targets: [
+                        TargetDescription(name: "Foo"),
                         TargetDescription(name: "Bar"),
                     ]),
                 Manifest.createRootManifest(
@@ -285,6 +328,7 @@ class PackageGraphTests: XCTestCase {
                     path: .init(path: "/Bar"),
                     targets: [
                         TargetDescription(name: "Bar"),
+                        TargetDescription(name: "Baz"),
                     ]),
             ],
             observabilityScope: observability.topScope
@@ -356,9 +400,13 @@ class PackageGraphTests: XCTestCase {
 
     func testSeveralDuplicateModules() throws {
         let fs = InMemoryFileSystem(emptyFiles:
+            "/Fourth/Sources/Fourth/source.swift",
             "/Fourth/Sources/Bar/source.swift",
+            "/Third/Sources/Third/source.swift",
             "/Third/Sources/Bar/source.swift",
+            "/Second/Sources/Second/source.swift",
             "/Second/Sources/Foo/source.swift",
+            "/First/Sources/First/source.swift",
             "/First/Sources/Foo/source.swift"
         )
 
@@ -370,27 +418,30 @@ class PackageGraphTests: XCTestCase {
                     displayName: "Fourth",
                     path: .init(path: "/Fourth"),
                     products: [
-                        ProductDescription(name: "Fourth", type: .library(.automatic), targets: ["Bar"])
+                        ProductDescription(name: "Fourth", type: .library(.automatic), targets: ["Fourth", "Bar"])
                     ],
                     targets: [
+                        TargetDescription(name: "Fourth"),
                         TargetDescription(name: "Bar"),
                     ]),
                 Manifest.createFileSystemManifest(
                     displayName: "Third",
                     path: .init(path: "/Third"),
                     products: [
-                        ProductDescription(name: "Third", type: .library(.automatic), targets: ["Bar"])
+                        ProductDescription(name: "Third", type: .library(.automatic), targets: ["Third", "Bar"])
                     ],
                     targets: [
+                        TargetDescription(name: "Third"),
                         TargetDescription(name: "Bar"),
                     ]),
                 Manifest.createFileSystemManifest(
                     displayName: "Second",
                     path: .init(path: "/Second"),
                     products: [
-                        ProductDescription(name: "Second", type: .library(.automatic), targets: ["Foo"])
+                        ProductDescription(name: "Second", type: .library(.automatic), targets: ["Second", "Foo"])
                     ],
                     targets: [
+                        TargetDescription(name: "Second"),
                         TargetDescription(name: "Foo"),
                     ]),
                 Manifest.createRootManifest(
@@ -401,7 +452,11 @@ class PackageGraphTests: XCTestCase {
                         .localSourceControl(path: .init(path: "/Third"), requirement: .upToNextMajor(from: "1.0.0")),
                         .localSourceControl(path: .init(path: "/Fourth"), requirement: .upToNextMajor(from: "1.0.0")),
                     ],
+                    products: [
+                        ProductDescription(name: "First", type: .library(.automatic), targets: ["First", "Foo"])
+                    ],
                     targets: [
+                        TargetDescription(name: "First"),
                         TargetDescription(name: "Foo", dependencies: ["Second", "Third", "Fourth"]),
                     ]),
             ],
@@ -409,14 +464,15 @@ class PackageGraphTests: XCTestCase {
         )
 
         testDiagnostics(observability.diagnostics) { result in
-            result.check(diagnostic: "multiple targets named 'Bar' in: 'fourth', 'third'; consider using the `moduleAliases` parameter in manifest to provide unique names", severity: .error)
-            result.check(diagnostic: "multiple targets named 'Foo' in: 'first', 'second'; consider using the `moduleAliases` parameter in manifest to provide unique names", severity: .error)
+            result.checkUnordered(diagnostic: "multiple targets named 'Bar' in: 'fourth', 'third'; consider using the `moduleAliases` parameter in manifest to provide unique names", severity: .error)
+            result.checkUnordered(diagnostic: "multiple targets named 'Foo' in: 'first', 'second'; consider using the `moduleAliases` parameter in manifest to provide unique names", severity: .error)
         }
     }
 
     func testNestedDuplicateModules() throws {
         let fs = InMemoryFileSystem(emptyFiles:
             "/Fourth/Sources/First/source.swift",
+            "/Fourth/Sources/Fourth/source.swift",
             "/Third/Sources/Third/source.swift",
             "/Second/Sources/Second/source.swift",
             "/First/Sources/First/source.swift"
@@ -430,9 +486,10 @@ class PackageGraphTests: XCTestCase {
                     displayName: "Fourth",
                     path: .init(path: "/Fourth"),
                     products: [
-                        ProductDescription(name: "Fourth", type: .library(.automatic), targets: ["First"])
+                        ProductDescription(name: "Fourth", type: .library(.automatic), targets: ["Fourth", "First"])
                     ],
                     targets: [
+                        TargetDescription(name: "Fourth"),
                         TargetDescription(name: "First"),
                     ]),
                 Manifest.createFileSystemManifest(
@@ -477,6 +534,151 @@ class PackageGraphTests: XCTestCase {
 
         testDiagnostics(observability.diagnostics) { result in
             result.check(diagnostic: "multiple targets named 'First' in: 'first', 'fourth'; consider using the `moduleAliases` parameter in manifest to provide unique names", severity: .error)
+        }
+    }
+
+    func testPotentiallyDuplicatePackages() throws {
+        let fs = InMemoryFileSystem(emptyFiles:
+            "/First/Sources/Foo/source.swift",
+            "/First/Sources/Bar/source.swift",
+            "/Second/Sources/Foo/source.swift",
+            "/Second/Sources/Bar/source.swift"
+        )
+
+        let observability = ObservabilitySystem.makeForTesting()
+        _ = try loadPackageGraph(
+            fileSystem: fs,
+            manifests: [
+                Manifest.createRootManifest(
+                    displayName: "First",
+                    path: .init(path: "/First"),
+                    dependencies: [
+                        .localSourceControl(path: .init(path: "/Second"), requirement: .upToNextMajor(from: "1.0.0")),
+                    ],
+                    products: [
+                        ProductDescription(name: "First", type: .library(.automatic), targets: ["Foo", "Bar"])
+                    ],
+                    targets: [
+                        TargetDescription(name: "Foo"),
+                        TargetDescription(name: "Bar"),
+                    ]),
+                Manifest.createLocalSourceControlManifest(
+                    displayName: "Second",
+                    path: .init(path: "/Second"),
+                    products: [
+                        ProductDescription(name: "Second", type: .library(.automatic), targets: ["Foo", "Bar"])
+                    ],
+                    targets: [
+                        TargetDescription(name: "Foo"),
+                        TargetDescription(name: "Bar"),
+                    ]),
+            ],
+            observabilityScope: observability.topScope
+        )
+
+        testDiagnostics(observability.diagnostics) { result in
+            result.check(diagnostic: .contains("multiple similar targets 'Bar', 'Foo' appear in package 'first' and 'second'"), severity: .error)
+        }
+    }
+
+    func testPotentiallyDuplicatePackagesManyTargets() throws {
+        let fs = InMemoryFileSystem(emptyFiles:
+            "/First/Sources/Foo/source.swift",
+            "/First/Sources/Bar/source.swift",
+            "/First/Sources/Baz/source.swift",
+            "/First/Sources/Qux/source.swift",
+            "/First/Sources/Quux/source.swift",
+            "/Second/Sources/Foo/source.swift",
+            "/Second/Sources/Bar/source.swift",
+            "/Second/Sources/Baz/source.swift",
+            "/Second/Sources/Qux/source.swift",
+            "/Second/Sources/Quux/source.swift"
+        )
+
+        let observability = ObservabilitySystem.makeForTesting()
+        _ = try loadPackageGraph(
+            fileSystem: fs,
+            manifests: [
+                Manifest.createRootManifest(
+                    displayName: "First",
+                    path: .init(path: "/First"),
+                    dependencies: [
+                        .localSourceControl(path: .init(path: "/Second"), requirement: .upToNextMajor(from: "1.0.0")),
+                    ],
+                    products: [
+                        ProductDescription(name: "First", type: .library(.automatic), targets: ["Foo", "Bar", "Baz", "Qux", "Quux"])
+                    ],
+                    targets: [
+                        TargetDescription(name: "Foo"),
+                        TargetDescription(name: "Bar"),
+                        TargetDescription(name: "Baz"),
+                        TargetDescription(name: "Qux"),
+                        TargetDescription(name: "Quux"),
+                    ]),
+                Manifest.createLocalSourceControlManifest(
+                    displayName: "Second",
+                    path: .init(path: "/Second"),
+                    products: [
+                        ProductDescription(name: "Second", type: .library(.automatic), targets: ["Foo", "Bar", "Baz", "Qux", "Quux"])
+                    ],
+                    targets: [
+                        TargetDescription(name: "Foo"),
+                        TargetDescription(name: "Bar"),
+                        TargetDescription(name: "Baz"),
+                        TargetDescription(name: "Qux"),
+                        TargetDescription(name: "Quux"),
+                    ]),
+            ],
+            observabilityScope: observability.topScope
+        )
+
+        testDiagnostics(observability.diagnostics) { result in
+            result.check(diagnostic: .contains("multiple similar targets 'Bar', 'Baz', 'Foo' and 2 others appear in package 'first' and 'second'"), severity: .error)
+        }
+    }
+
+    func testPotentiallyDuplicatePackagesRegistrySCM() throws {
+        let fs = InMemoryFileSystem(emptyFiles:
+            "/First/Sources/Foo/source.swift",
+            "/First/Sources/Bar/source.swift",
+            "/Second/Sources/Foo/source.swift",
+            "/Second/Sources/Bar/source.swift"
+        )
+
+        let observability = ObservabilitySystem.makeForTesting()
+        _ = try loadPackageGraph(
+            fileSystem: fs,
+            manifests: [
+                Manifest.createRootManifest(
+                    displayName: "First",
+                    path: .init(path: "/First"),
+                    dependencies: [
+                        .registry(identity: "test.second", requirement: .upToNextMajor(from: "1.0.0")),
+                    ],
+                    products: [
+                        ProductDescription(name: "First", type: .library(.automatic), targets: ["Foo", "Bar"])
+                    ],
+                    targets: [
+                        TargetDescription(name: "Foo"),
+                        TargetDescription(name: "Bar"),
+                    ]),
+                Manifest.createRegistryManifest(
+                    displayName: "Second",
+                    identity: .plain("test.second"),
+                    path: .init(path: "/Second"),
+                    products: [
+                        ProductDescription(name: "Second", type: .library(.automatic), targets: ["Foo", "Bar"])
+                    ],
+                    targets: [
+                        TargetDescription(name: "Foo"),
+                        TargetDescription(name: "Bar"),
+                    ]),
+            ],
+            observabilityScope: observability.topScope
+        )
+
+        testDiagnostics(observability.diagnostics) { result in
+            result.check(diagnostic: .contains("multiple similar targets 'Bar', 'Foo' appear in registry package 'test.second' and source control package 'first'"), severity: .error)
         }
     }
 
@@ -2341,6 +2543,43 @@ class PackageGraphTests: XCTestCase {
                             name: "TransitiveBar",
                             dependencies: ["Bar2"]
                         ),
+                    ]),
+            ],
+            observabilityScope: observability.topScope
+        )
+
+        XCTAssertEqual(observability.diagnostics.count, 0, "unexpected diagnostics: \(observability.diagnostics.map { $0.description })")
+    }
+
+    func testCustomNameInPackageDependency() throws {
+        let fs = InMemoryFileSystem(emptyFiles:
+            "/Foo/Sources/Foo/source.swift",
+            "/Bar2/Sources/Bar/source.swift"
+        )
+
+        let observability = ObservabilitySystem.makeForTesting()
+        _ = try loadPackageGraph(
+            fileSystem: fs,
+            manifests: [
+                Manifest.createRootManifest(
+                    displayName: "Foo",
+                    path: .init(path: "/Foo"),
+                    toolsVersion: .v5_9,
+                    dependencies: [
+                        .fileSystem(deprecatedName: "Bar", path: "/Bar2"),
+                    ],
+                    targets: [
+                        TargetDescription(name: "Foo", dependencies: [.product(name: "Bar", package: "BAR")]),
+                    ]),
+                Manifest.createFileSystemManifest(
+                    displayName: "Bar",
+                    path: .init(path: "/Bar2"),
+                    toolsVersion: .v5_9,
+                    products: [
+                        ProductDescription(name: "Bar", type: .library(.automatic), targets: ["Bar"]),
+                    ],
+                    targets: [
+                        TargetDescription(name: "Bar"),
                     ]),
             ],
             observabilityScope: observability.topScope

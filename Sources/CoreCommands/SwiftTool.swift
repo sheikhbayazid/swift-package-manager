@@ -50,13 +50,16 @@ import var TSCUtility.verbosity
 typealias Diagnostic = Basics.Diagnostic
 
 public struct ToolWorkspaceConfiguration {
+    let shouldInstallSignalHandlers: Bool
     let wantsMultipleTestProducts: Bool
     let wantsREPLProduct: Bool
 
     public init(
+        shouldInstallSignalHandlers: Bool = true,
         wantsMultipleTestProducts: Bool = false,
         wantsREPLProduct: Bool = false
     ) {
+        self.shouldInstallSignalHandlers = shouldInstallSignalHandlers
         self.wantsMultipleTestProducts = wantsMultipleTestProducts
         self.wantsREPLProduct = wantsREPLProduct
     }
@@ -114,8 +117,8 @@ extension SwiftCommand {
         // wait for all observability items to process
         swiftTool.waitForObservabilityEvents(timeout: .now() + 5)
 
-        if let error = toolError {
-            throw error
+        if let toolError {
+            throw toolError
         }
     }
 }
@@ -150,8 +153,8 @@ extension AsyncSwiftCommand {
         // wait for all observability items to process
         swiftTool.waitForObservabilityEvents(timeout: .now() + 5)
 
-        if let error = toolError {
-            throw error
+        if let toolError {
+            throw toolError
         }
     }
 }
@@ -308,57 +311,9 @@ public final class SwiftTool {
                 try ProcessEnv.chdir(packagePath)
             }
 
-            #if os(Windows)
-            // set shutdown handler to terminate sub-processes, etc
-            SwiftTool.cancellator = cancellator
-            _ = SetConsoleCtrlHandler({ _ in
-                // Terminate all processes on receiving an interrupt signal.
-                try? SwiftTool.cancellator?.cancel(deadline: .now() + .seconds(30))
-
-                // Reset the handler.
-                _ = SetConsoleCtrlHandler(nil, false)
-
-                // Exit as if by signal()
-                TerminateProcess(GetCurrentProcess(), 3)
-
-                return true
-            }, true)
-            #else
-            // trap SIGINT to terminate sub-processes, etc
-            signal(SIGINT, SIG_IGN)
-            let interruptSignalSource = DispatchSource.makeSignalSource(signal: SIGINT)
-            interruptSignalSource.setEventHandler {
-                // cancel the trap?
-                interruptSignalSource.cancel()
-
-                // Terminate all processes on receiving an interrupt signal.
-                try? cancellator.cancel(deadline: .now() + .seconds(30))
-
-                #if os(macOS) || os(OpenBSD)
-                // Install the default signal handler.
-                var action = sigaction()
-                action.__sigaction_u.__sa_handler = SIG_DFL
-                sigaction(SIGINT, &action, nil)
-                kill(getpid(), SIGINT)
-                #elseif os(Android)
-                // Install the default signal handler.
-                var action = sigaction()
-                action.sa_handler = SIG_DFL
-                sigaction(SIGINT, &action, nil)
-                kill(getpid(), SIGINT)
-                #else
-                var action = sigaction()
-                action.__sigaction_handler = unsafeBitCast(
-                    SIG_DFL,
-                    to: sigaction.__Unnamed_union___sigaction_handler.self
-                )
-                sigaction(SIGINT, &action, nil)
-                kill(getpid(), SIGINT)
-                #endif
+            if toolWorkspaceConfiguration.shouldInstallSignalHandlers {
+                cancellator.installSignalHandlers()
             }
-            interruptSignalSource.resume()
-            #endif
-
             self.cancellator = cancellator
         } catch {
             self.observabilityScope.emit(error)
@@ -690,7 +645,7 @@ public final class SwiftTool {
         customLogLevel: Basics.Diagnostic.Severity? = .none,
         customObservabilityScope: ObservabilityScope? = .none
     ) throws -> BuildSystem {
-        guard let buildSystemProvider = buildSystemProvider else {
+        guard let buildSystemProvider else {
             fatalError("build system provider not initialized")
         }
 
@@ -726,12 +681,15 @@ public final class SwiftTool {
             let dataPath = self.scratchDirectory.appending(
                 component: destinationTriple.platformBuildPathComponent(buildSystem: options.build.buildSystem)
             )
+            var buildFlags = options.build.buildFlags
+            buildFlags.append(destinationToolchain.extraFlags)
+
             return try BuildParameters(
                 dataPath: dataPath,
                 configuration: options.build.configuration,
                 toolchain: destinationToolchain,
                 destinationTriple: destinationTriple,
-                flags: options.build.buildFlags,
+                flags: buildFlags,
                 pkgConfigDirectories: options.locations.pkgConfigDirectories,
                 architectures: options.build.architectures,
                 workers: options.build.jobs ?? UInt32(ProcessInfo.processInfo.activeProcessorCount),

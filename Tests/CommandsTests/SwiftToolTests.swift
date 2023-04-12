@@ -161,7 +161,7 @@ final class SwiftToolTests: CommandsTestCase {
 
             // custom .netrc file
             do {
-                let customPath = try fs.homeDirectory.appending(component: UUID().uuidString)
+                let customPath = try fs.tempDirectory.appending(component: UUID().uuidString)
                 try fs.writeFileContents(customPath) {
                     "machine mymachine.labkey.org login custom@labkey.org password custom"
                 }
@@ -195,7 +195,7 @@ final class SwiftToolTests: CommandsTestCase {
 
             // custom .netrc file
             do {
-                let customPath = try fs.homeDirectory.appending(component: UUID().uuidString)
+                let customPath = try fs.tempDirectory.appending(component: UUID().uuidString)
                 try fs.writeFileContents(customPath) {
                     "machine mymachine.labkey.org login custom@labkey.org password custom"
                 }
@@ -237,7 +237,7 @@ extension SwiftTool {
         return try SwiftTool(
             outputStream: outputStream,
             options: options,
-            toolWorkspaceConfiguration: .init(),
+            toolWorkspaceConfiguration: .init(shouldInstallSignalHandlers: false),
             workspaceDelegateProvider: {
                 ToolWorkspaceDelegate(
                     observabilityScope: $0,

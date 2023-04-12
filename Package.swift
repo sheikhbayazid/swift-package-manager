@@ -15,6 +15,17 @@
 import PackageDescription
 import class Foundation.ProcessInfo
 
+// When building the toolchain on the CI for ELF platforms, remove the CI's
+// stdlib absolute runpath and add ELF's $ORIGIN relative paths before installing.
+let swiftpmLinkSettings : [LinkerSetting]
+let packageLibraryLinkSettings : [LinkerSetting]
+if let resourceDirPath = ProcessInfo.processInfo.environment["SWIFTCI_INSTALL_RPATH_OS"] {
+  swiftpmLinkSettings = [ .unsafeFlags(["-no-toolchain-stdlib-rpath", "-Xlinker", "-rpath", "-Xlinker", "$ORIGIN/../lib/swift/\(resourceDirPath)"]) ]
+  packageLibraryLinkSettings = [ .unsafeFlags(["-no-toolchain-stdlib-rpath", "-Xlinker", "-rpath", "-Xlinker", "$ORIGIN/../../\(resourceDirPath)"]) ]
+} else {
+  swiftpmLinkSettings = []
+  packageLibraryLinkSettings = []
+}
 
 /** SwiftPMDataModel is the subset of SwiftPM product that includes just its data model.
 This allows some clients (such as IDEs) that use SwiftPM's data model but not its build system
@@ -151,7 +162,8 @@ let package = Package(
             swiftSettings: [
                 .unsafeFlags(["-package-description-version", "999.0"]),
                 .unsafeFlags(["-enable-library-evolution"]),
-            ]
+            ],
+            linkerSettings: packageLibraryLinkSettings
         ),
 
         // The `PackagePlugin` target provides the API that is available to
@@ -163,7 +175,8 @@ let package = Package(
             swiftSettings: [
                 .unsafeFlags(["-package-description-version", "999.0"]),
                 .unsafeFlags(["-enable-library-evolution"]),
-            ]
+            ],
+            linkerSettings: packageLibraryLinkSettings
         ),
 
         // MARK: SwiftPM specific support libraries
@@ -497,7 +510,8 @@ let package = Package(
                 "CrossCompilationDestinationsTool",
                 "PackageCollectionsTool",
                 "PackageRegistryTool"
-            ]
+            ],
+            linkerSettings: swiftpmLinkSettings
         ),
         .executableTarget(
             /** Interact with package registry */
@@ -554,8 +568,10 @@ let package = Package(
             name: "BasicsTests",
             dependencies: ["Basics", "SPMTestSupport", "tsan_utils"],
             exclude: [
-                "Inputs/archive.zip",
-                "Inputs/invalid_archive.zip",
+                "Archiver/Inputs/archive.tar.gz",
+                "Archiver/Inputs/archive.zip",
+                "Archiver/Inputs/invalid_archive.tar.gz",
+                "Archiver/Inputs/invalid_archive.zip",
             ]
         ),
         .testTarget(
@@ -563,45 +579,8 @@ let package = Package(
             dependencies: ["Build", "SPMTestSupport"]
         ),
         .testTarget(
-            name: "CommandsTests",
-            dependencies: [
-                "swift-build",
-                "swift-package",
-                "swift-test",
-                "swift-run",
-                "Basics",
-                "Build",
-                "Commands",
-                "PackageModel",
-                "PackageRegistryTool",
-                "SourceControl",
-                "SPMTestSupport",
-                "Workspace",
-            ]
-        ),
-        .testTarget(
             name: "WorkspaceTests",
             dependencies: ["Workspace", "SPMTestSupport"]
-        ),
-        // rdar://101868275 "error: cannot find 'XCTAssertEqual' in scope" can affect almost any functional test, so we flat out disable them all until we know what is going on
-        /*.testTarget(
-            name: "FunctionalTests",
-            dependencies: [
-                "swift-build",
-                "swift-package",
-                "swift-test",
-                "PackageModel",
-                "SPMTestSupport"
-            ]
-        ),*/
-        .testTarget(
-            name: "FunctionalPerformanceTests",
-            dependencies: [
-                "swift-build",
-                "swift-package",
-                "swift-test",
-                "SPMTestSupport"
-            ]
         ),
         .testTarget(
             name: "PackageDescriptionTests",
@@ -685,6 +664,52 @@ let package = Package(
     ],
     swiftLanguageVersions: [.v5]
 )
+
+// Workaround SPM's attempt to link in executables which does not work on all
+// platforms.
+#if !os(Windows)
+package.targets.append(contentsOf: [
+    .testTarget(
+        name: "CommandsTests",
+        dependencies: [
+            "swift-build",
+            "swift-package",
+            "swift-test",
+            "swift-run",
+            "Basics",
+            "Build",
+            "Commands",
+            "PackageModel",
+            "PackageRegistryTool",
+            "SourceControl",
+            "SPMTestSupport",
+            "Workspace",
+        ]
+    ),
+
+    // rdar://101868275 "error: cannot find 'XCTAssertEqual' in scope" can affect almost any functional test, so we flat out disable them all until we know what is going on
+    /*.testTarget(
+        name: "FunctionalTests",
+        dependencies: [
+            "swift-build",
+            "swift-package",
+            "swift-test",
+            "PackageModel",
+            "SPMTestSupport"
+        ]
+    ),*/
+
+    .testTarget(
+        name: "FunctionalPerformanceTests",
+        dependencies: [
+            "swift-build",
+            "swift-package",
+            "swift-test",
+            "SPMTestSupport"
+        ]
+    ),
+])
+#endif
 
 // Add package dependency on llbuild when not bootstrapping.
 //

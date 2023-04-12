@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift open source project
 //
-// Copyright (c) 2022 Apple Inc. and the Swift project authors
+// Copyright (c) 2022-2023 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See http://swift.org/LICENSE.txt for license information
@@ -10,8 +10,15 @@
 //
 //===----------------------------------------------------------------------===//
 
+
 import Basics
-import TSCBasic
+
+import func TSCBasic.tsc_await
+import func TSCBasic.withTemporaryDirectory
+import protocol TSCBasic.FileSystem
+import struct Foundation.URL
+import struct TSCBasic.AbsolutePath
+import struct TSCBasic.RegEx
 
 /// Represents an `.artifactbundle` on the filesystem that contains cross-compilation destinations.
 public struct DestinationBundle {
@@ -80,7 +87,7 @@ public struct DestinationBundle {
         hostTriple: Triple,
         observabilityScope: ObservabilityScope
     ) throws -> Destination {
-        guard let destinationsDirectory = destinationsDirectory else {
+        guard let destinationsDirectory else {
             throw StringError(
                 """
                 No cross-compilation destinations directory found, specify one
@@ -118,6 +125,175 @@ public struct DestinationBundle {
         selectedDestination.applyPathCLIOptions()
 
         return selectedDestination
+    }
+    
+    /// Installs a destination bundle from a given path or URL to a destinations installation directory.
+    /// - Parameters:
+    ///   - bundlePathOrURL: A string passed on the command line, which is either an absolute or relative to a current
+    ///   working directory path, or a URL to a destination artifact bundle.
+    ///   - destinationsDirectory: A directory where the destination artifact bundle should be installed.
+    ///   - fileSystem: File system on which all of the file operations should run.
+    ///   - observabilityScope: Observability scope for reporting warnings and errors.
+    public static func install(
+        bundlePathOrURL: String,
+        destinationsDirectory: AbsolutePath,
+        _ fileSystem: some FileSystem,
+        _ archiver: some Archiver,
+        _ observabilityScope: ObservabilityScope
+    ) throws {
+        _ = try withTemporaryDirectory(
+            removeTreeOnDeinit: true
+        ) { temporaryDirectory in
+            let bundlePath: AbsolutePath
+
+            if
+                let bundleURL = URL(string: bundlePathOrURL),
+                let scheme = bundleURL.scheme,
+                scheme == "http" || scheme == "https"
+            {
+                let bundleName = bundleURL.lastPathComponent
+                let downloadedBundlePath = temporaryDirectory.appending(component: bundleName)
+
+                let client = LegacyHTTPClient()
+                var request = LegacyHTTPClientRequest.download(
+                    url: bundleURL,
+                    fileSystem: fileSystem,
+                    destination: downloadedBundlePath
+                )
+                request.options.validResponseCodes = [200]
+                _ = try tsc_await {
+                    client.execute(
+                        request,
+                        observabilityScope: observabilityScope,
+                        progress: nil,
+                        completion: $0
+                    )
+                }
+
+                bundlePath = downloadedBundlePath
+
+                print("Destination artifact bundle successfully downloaded from `\(bundleURL)`.")
+            } else if
+                let cwd = fileSystem.currentWorkingDirectory,
+                let originalBundlePath = try? AbsolutePath(validating: bundlePathOrURL, relativeTo: cwd)
+            {
+                bundlePath = originalBundlePath
+            } else {
+                throw DestinationError.invalidPathOrURL(bundlePathOrURL)
+            }
+
+            try installIfValid(
+                bundlePath: bundlePath,
+                destinationsDirectory: destinationsDirectory,
+                temporaryDirectory: temporaryDirectory,
+                fileSystem,
+                archiver,
+                observabilityScope
+            )
+        }
+
+        print("Destination artifact bundle at `\(bundlePathOrURL)` successfully installed.")
+    }
+
+    /// Unpacks a destination bundle if it has an archive extension in its filename.
+    /// - Parameters:
+    ///   - bundlePath: Absolute path to a destination bundle to unpack if needed.
+    ///   - temporaryDirectory: Absolute path to a temporary directory in which the bundle can be unpacked if needed.
+    ///   - fileSystem: A file system to operate on that contains the given paths.
+    ///   - archiver: Archiver to use for unpacking.
+    /// - Returns: Path to an unpacked destination bundle if unpacking is needed, value of `bundlePath` is returned
+    /// otherwise.
+    private static func unpackIfNeeded(
+        bundlePath: AbsolutePath,
+        destinationsDirectory: AbsolutePath,
+        temporaryDirectory: AbsolutePath,
+        _ fileSystem: some FileSystem,
+        _ archiver: some Archiver
+    ) throws -> AbsolutePath {
+        let regex = try RegEx(pattern: "(.+\\.artifactbundle).*")
+
+        guard let bundleName = bundlePath.components.last else {
+            throw DestinationError.invalidPathOrURL(bundlePath.pathString)
+        }
+
+        guard let unpackedBundleName = regex.matchGroups(in: bundleName).first?.first else {
+            throw DestinationError.invalidBundleName(bundleName)
+        }
+
+        let installedBundlePath = destinationsDirectory.appending(component: unpackedBundleName)
+        guard !fileSystem.exists(installedBundlePath) else {
+            throw DestinationError.destinationBundleAlreadyInstalled(bundleName: unpackedBundleName)
+        }
+
+        // If there's no archive extension on the bundle name, assuming it's not archived and returning the same path.
+        guard unpackedBundleName != bundleName else {
+            return bundlePath
+        }
+
+        print("\(bundleName) is assumed to be an archive, unpacking...")
+
+        try tsc_await { archiver.extract(from: bundlePath, to: temporaryDirectory, completion: $0) }
+
+        return temporaryDirectory.appending(component: unpackedBundleName)
+    }
+
+    /// Installs an unpacked destination bundle to a destinations installation directory.
+    /// - Parameters:
+    ///   - bundlePath: absolute path to an unpacked destination bundle directory.
+    ///   - destinationsDirectory: a directory where the destination artifact bundle should be installed.
+    ///   - fileSystem: file system on which all of the file operations should run.
+    ///   - observabilityScope: observability scope for reporting warnings and errors.
+    private static func installIfValid(
+        bundlePath: AbsolutePath,
+        destinationsDirectory: AbsolutePath,
+        temporaryDirectory: AbsolutePath,
+        _ fileSystem: some FileSystem,
+        _ archiver: some Archiver,
+        _ observabilityScope: ObservabilityScope
+    ) throws {
+        let unpackedBundlePath = try unpackIfNeeded(
+            bundlePath: bundlePath,
+            destinationsDirectory: destinationsDirectory,
+            temporaryDirectory: temporaryDirectory,
+            fileSystem,
+            archiver
+        )
+
+        guard
+            fileSystem.isDirectory(unpackedBundlePath),
+            let bundleName = unpackedBundlePath.components.last
+        else {
+            throw DestinationError.pathIsNotDirectory(bundlePath)
+        }
+
+        let installedBundlePath = destinationsDirectory.appending(component: bundleName)
+
+        let validatedBundle = try Self.parseAndValidate(
+            bundlePath: unpackedBundlePath,
+            fileSystem: fileSystem,
+            observabilityScope: observabilityScope
+        )
+        let newArtifactIDs = validatedBundle.artifacts.keys
+
+        let installedBundles = try Self.getAllValidBundles(
+            destinationsDirectory: destinationsDirectory,
+            fileSystem: fileSystem,
+            observabilityScope: observabilityScope
+        )
+
+        for installedBundle in installedBundles {
+            for artifactID in installedBundle.artifacts.keys {
+                guard !newArtifactIDs.contains(artifactID) else {
+                    throw DestinationError.destinationArtifactAlreadyInstalled(
+                        installedBundleName: installedBundle.name,
+                        newBundleName: validatedBundle.name,
+                        artifactID: artifactID
+                    )
+                }
+            }
+        }
+
+        try fileSystem.copy(from: unpackedBundlePath, to: installedBundlePath)
     }
 
     /// Parses metadata of an `.artifactbundle` and validates it as a bundle containing
@@ -250,7 +426,7 @@ extension Array where Element == DestinationBundle {
 
                     for destination in variant.destinations {
                         if artifactID == selector {
-                            if let matchedByID = matchedByID {
+                            if let matchedByID {
                                 observabilityScope.emit(
                                     warning:
                                     """
@@ -267,7 +443,7 @@ extension Array where Element == DestinationBundle {
                         }
 
                         if destination.targetTriple?.tripleString == selector {
-                            if let matchedByTriple = matchedByTriple {
+                            if let matchedByTriple {
                                 observabilityScope.emit(
                                     warning:
                                     """
@@ -287,7 +463,7 @@ extension Array where Element == DestinationBundle {
             }
         }
 
-        if let matchedByID = matchedByID, let matchedByTriple = matchedByTriple, matchedByID != matchedByTriple {
+        if let matchedByID, let matchedByTriple, matchedByID != matchedByTriple {
             observabilityScope.emit(
                 warning:
                 """

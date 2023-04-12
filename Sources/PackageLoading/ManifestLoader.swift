@@ -44,7 +44,7 @@ extension ManifestParseError: CustomStringConvertible {
             return "'\(manifestPath)' is empty"
         case .invalidManifestFormat(let error, _, let compilerCommandLine):
             let suffix: String
-            if let compilerCommandLine = compilerCommandLine {
+            if let compilerCommandLine {
                 suffix = " (compiled with: \(compilerCommandLine))"
             } else {
                 suffix = ""
@@ -56,7 +56,7 @@ extension ManifestParseError: CustomStringConvertible {
             return "invalid manifest, imports restricted modules: \(modules.joined(separator: ", "))"
         case .unsupportedVersion(let version, let underlyingError):
             let message = "serialized JSON uses unsupported version \(version), indicating use of a mismatched PackageDescription library"
-            if let underlyingError = underlyingError {
+            if let underlyingError {
                 return "\(message), underlying error: \(underlyingError)"
             }
             return message
@@ -262,6 +262,7 @@ public final class ManifestLoader: ManifestLoaderProtocol {
                     )
                     targets.append(try TargetDescription(
                         name: parsedManifest.name,
+                        group: .excluded, // access to only public APIs is allowed for system libs
                         path: "",
                         type: .system,
                         pkgConfig: parsedManifest.pkgConfig,
@@ -606,7 +607,7 @@ public final class ManifestLoader: ManifestLoaderProtocol {
         var cmd: [String] = []
         cmd += [self.toolchain.swiftCompilerPathForManifests.pathString]
 
-        if let vfsOverlayPath = vfsOverlayPath {
+        if let vfsOverlayPath {
             cmd += ["-vfsoverlay", vfsOverlayPath.pathString]
         }
 
@@ -640,7 +641,7 @@ public final class ManifestLoader: ManifestLoaderProtocol {
         cmd += self.toolchain.swiftCompilerFlags
 
         cmd += self.interpreterFlags(for: toolsVersion)
-        if let moduleCachePath = moduleCachePath {
+        if let moduleCachePath {
             cmd += ["-module-cache-path", moduleCachePath.pathString]
         }
 

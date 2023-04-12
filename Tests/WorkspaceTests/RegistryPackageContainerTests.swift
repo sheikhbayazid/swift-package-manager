@@ -375,7 +375,8 @@ class RegistryPackageContainerTests: XCTestCase {
                         signing: nil
                     )
                 ],
-                metadata: .init(description: "")
+                metadata: .init(description: ""),
+                publishedAt: nil
             )
             completion(.success(
                 HTTPClientResponse(
@@ -468,7 +469,8 @@ class RegistryPackageContainerTests: XCTestCase {
                 }
             }),
             customArchiverProvider: { _ in archiver },
-            delegate: .none
+            delegate: .none,
+            checksumAlgorithm: MockHashAlgorithm()
         )
     }
 

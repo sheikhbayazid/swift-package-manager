@@ -93,7 +93,7 @@ public final class SwiftTargetBuildDescription {
     var moduleOutputPath: AbsolutePath {
         // If we're an executable and we're not allowing test targets to link against us, we hide the module.
         let allowLinkingAgainstExecutables = (buildParameters.triple.isDarwin() || self.buildParameters.triple
-            .isLinux() || self.buildParameters.triple.isWindows()) && self.toolsVersion >= .v5_5 && target.type != .macro
+            .isLinux() || self.buildParameters.triple.isWindows()) && self.toolsVersion >= .v5_5
         let dirPath = (target.type == .executable && !allowLinkingAgainstExecutables) ? self.tempsPath : self
             .buildParameters.buildPath
         return dirPath.appending(component: self.target.c99name + ".swiftmodule")
@@ -240,7 +240,7 @@ public final class SwiftTargetBuildDescription {
         self.toolsVersion = toolsVersion
         self.buildParameters = buildParameters
         // Unless mentioned explicitly, use the target type to determine if this is a test target.
-        if let testTargetRole = testTargetRole {
+        if let testTargetRole {
             self.testTargetRole = testTargetRole
         } else if target.type == .test {
             self.testTargetRole = .default
@@ -336,7 +336,7 @@ public final class SwiftTargetBuildDescription {
     /// Generate the resource bundle accessor, if appropriate.
     private func generateResourceAccessor() throws {
         // Do nothing if we're not generating a bundle.
-        guard let bundlePath = self.bundlePath else { return }
+        guard let bundlePath else { return }
 
         let mainPathSubstitution: String
         if self.buildParameters.triple.isWASI() {
@@ -385,12 +385,19 @@ public final class SwiftTargetBuildDescription {
         try self.fileSystem.writeIfChanged(path: path, bytes: stream.bytes)
     }
 
-    private func packageNameArgumentIfSupported(with pkg: ResolvedPackage) -> [String] {
+    private func packageNameArgumentIfSupported(with pkg: ResolvedPackage, group: Target.Group) -> [String] {
+        let flag = "-package-name"
         if pkg.manifest.usePackageNameFlag,
-           driverSupport.checkToolchainDriverFlags(flags: ["package-name"], toolchain:  self.buildParameters.toolchain, fileSystem: self.fileSystem) {
-              return ["-package-name", pkg.identity.description.spm_mangledToC99ExtendedIdentifier()]
-          }
-          return []
+           driverSupport.checkToolchainDriverFlags(flags: [flag], toolchain:  self.buildParameters.toolchain, fileSystem: self.fileSystem) {
+            switch group {
+            case .package:
+                let pkgID = pkg.identity.description.spm_mangledToC99ExtendedIdentifier()
+                return [flag, pkgID]
+            case .excluded:
+                return []
+            }
+        }
+        return []
     }
 
     private func macroArguments() throws -> [String] {
@@ -450,7 +457,7 @@ public final class SwiftTargetBuildDescription {
         // when we link the executable, we will ask the linker to rename the entry point
         // symbol to just `_main` again (or if the linker doesn't support it, we'll
         // generate a source containing a redirect).
-        if (self.target.type == .executable || self.target.type == .snippet)
+        if (self.target.underlyingTarget as? SwiftTarget)?.supportsTestableExecutablesFeature == true
             && !self.isTestTarget && self.toolsVersion >= .v5_5
         {
             // We only do this if the linker supports it, as indicated by whether we
@@ -513,7 +520,7 @@ public final class SwiftTargetBuildDescription {
             }
         }
 
-        args += self.packageNameArgumentIfSupported(with: self.package)
+        args += self.packageNameArgumentIfSupported(with: self.package, group: self.target.group)
         args += try self.macroArguments()
 
         return args
@@ -527,7 +534,7 @@ public final class SwiftTargetBuildDescription {
 
         result.append("-module-name")
         result.append(self.target.c99name)
-        result.append(contentsOf: packageNameArgumentIfSupported(with: self.package))
+        result.append(contentsOf: packageNameArgumentIfSupported(with: self.package, group: self.target.group))
         if !scanInvocation {
             result.append("-emit-dependencies")
 
@@ -573,7 +580,7 @@ public final class SwiftTargetBuildDescription {
         result.append("-emit-module")
         result.append("-emit-module-path")
         result.append(self.moduleOutputPath.pathString)
-        result.append(contentsOf: packageNameArgumentIfSupported(with: self.package))
+        result.append(contentsOf: packageNameArgumentIfSupported(with: self.package, group: self.target.group))
         result += self.buildParameters.toolchain.extraFlags.swiftCompilerFlags
 
         result.append("-Xfrontend")
@@ -619,7 +626,7 @@ public final class SwiftTargetBuildDescription {
 
         result.append("-module-name")
         result.append(self.target.c99name)
-        result.append(contentsOf: packageNameArgumentIfSupported(with: self.package))
+        result.append(contentsOf: packageNameArgumentIfSupported(with: self.package, group: self.target.group))
         result.append("-incremental")
         result.append("-emit-dependencies")
 

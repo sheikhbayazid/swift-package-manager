@@ -468,7 +468,7 @@ extension Workspace.Configuration {
 
         @discardableResult
         public func applyShared(handler: (inout DependencyMirrors) throws -> Void) throws -> DependencyMirrors {
-            guard let sharedMirrors = self.sharedMirrors else {
+            guard let sharedMirrors else {
                 throw InternalError("shared mirrors not configured")
             }
             try sharedMirrors.apply(handler: handler)
@@ -642,7 +642,7 @@ extension Workspace.Configuration {
         public func updateShared(with handler: (inout RegistryConfiguration) throws -> Void) throws
             -> RegistryConfiguration
         {
-            guard let sharedRegistries = self.sharedRegistries else {
+            guard let sharedRegistries else {
                 throw InternalError("shared registries not configured")
             }
             try sharedRegistries.update(with: handler)
@@ -684,9 +684,12 @@ extension Workspace.Configuration {
                 return RegistryConfiguration()
             }
 
-            let data: Data = try fileSystem.readFileContents(self.path)
-            let decoder = JSONDecoder.makeWithDefaults()
-            return try decoder.decode(RegistryConfiguration.self, from: data)
+            do {
+                let decoder = JSONDecoder.makeWithDefaults()
+                return try decoder.decode(path: self.path, fileSystem: self.fileSystem, as: RegistryConfiguration.self)
+            } catch {
+                throw StringError("Failed loading registries configuration from '\(self.path)': \(error)")
+            }
         }
 
         public func save(_ configuration: RegistryConfiguration) throws {

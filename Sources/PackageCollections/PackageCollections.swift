@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift open source project
 //
-// Copyright (c) 2020-2022 Apple Inc. and the Swift project authors
+// Copyright (c) 2020-2023 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See http://swift.org/LICENSE.txt for license information
@@ -565,7 +565,7 @@ public struct PackageCollections: PackageCollectionsProtocol, Closable {
                 callback(.failure(error))
             case .success(let sources):
                 var collectionIdentifiers = sources.map { Model.CollectionIdentifier(from: $0) }
-                if let collections = collections {
+                if let collections {
                     collectionIdentifiers = collectionIdentifiers.filter { collections.contains($0) }
                 }
                 if collectionIdentifiers.isEmpty {
@@ -579,7 +579,7 @@ public struct PackageCollections: PackageCollectionsProtocol, Closable {
                         callback(.failure(error))
                     case .success(let packagesCollections):
                         let matches: [PackageCollectionsModel.Package]
-                        if let location = location {
+                        if let location {
                             // A package identity can be associated with multiple repository URLs
                             matches = packagesCollections.packages.filter { CanonicalPackageLocation($0.location) == CanonicalPackageLocation(location) }
                         }
@@ -657,6 +657,7 @@ public struct PackageCollections: PackageCollectionsProtocol, Closable {
                          defaultToolsVersion: packageVersion.defaultToolsVersion,
                          verifiedCompatibility: packageVersion.verifiedCompatibility,
                          license: packageVersion.license,
+                         author: versionMetadata?.author,
                          createdAt: versionMetadata?.createdAt ?? packageVersion.createdAt)
         }
         versions.sort(by: >)

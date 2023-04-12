@@ -113,7 +113,7 @@ extension Package.Error: CustomStringConvertible {
         switch self {
         case .noManifest(let path, let version):
             var string = "\(path) has no Package.swift manifest"
-            if let version = version {
+            if let version {
                 string += " for version \(version)"
             }
             return string
@@ -126,7 +126,7 @@ extension Manifest {
         return self.toolsVersion >= .v5_8
     }
     public var usePackageNameFlag: Bool {
-        return self.toolsVersion >= .v5_9
+        return self.toolsVersion >= .vNext
     }
 }
 

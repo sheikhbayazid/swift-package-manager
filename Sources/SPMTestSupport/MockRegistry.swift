@@ -49,8 +49,8 @@ public class MockRegistry {
         self.jsonEncoder = JSONEncoder.makeWithDefaults()
 
         var configuration = RegistryConfiguration()
-        if let baseURL = customBaseURL {
-            self.baseURL = baseURL
+        if let customBaseURL {
+            self.baseURL = customBaseURL
 
         } else {
             self.baseURL = URL("http://localhost/registry/mock")
@@ -68,7 +68,8 @@ public class MockRegistry {
             authorizationProvider: .none,
             customHTTPClient: LegacyHTTPClient(handler: self.httpHandler),
             customArchiverProvider: { fileSystem in MockRegistryArchiver(fileSystem: fileSystem) },
-            delegate: .none
+            delegate: .none,
+            checksumAlgorithm: checksumAlgorithm
         )
     }
 
@@ -100,7 +101,7 @@ public class MockRegistry {
             }
             self.packageVersions[identity] = updatedVersions
             // source control URLs
-            if let sourceControlURLs = sourceControlURLs {
+            if let sourceControlURLs {
                 var packageSourceControlURLs = self.packagesSourceControlURLs[identity] ?? []
                 packageSourceControlURLs.append(contentsOf: sourceControlURLs)
                 self.packagesSourceControlURLs[identity] = packageSourceControlURLs
@@ -201,7 +202,7 @@ public class MockRegistry {
         var headers = HTTPClientHeaders()
         headers.add(name: "Content-Version", value: "1")
         headers.add(name: "Content-Type", value: "application/json")
-        if let links = links {
+        if let links {
             headers.add(name: "Link", value: links)
         }
 
@@ -238,7 +239,8 @@ public class MockRegistry {
             metadata: .init(
                 description: "\(packageIdentity) description",
                 readmeURL: "http://\(packageIdentity)/readme"
-            )
+            ),
+            publishedAt: Date()
         )
 
         var headers = HTTPClientHeaders()
@@ -262,7 +264,7 @@ public class MockRegistry {
         }
 
         let filename: String
-        if let toolsVersion = toolsVersion {
+        if let toolsVersion {
             filename = Manifest.basename + "@swift-\(toolsVersion).swift"
         } else {
             filename = Manifest.basename + ".swift"

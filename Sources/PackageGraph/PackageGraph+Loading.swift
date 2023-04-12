@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift open source project
 //
-// Copyright (c) 2014-2021 Apple Inc. and the Swift project authors
+// Copyright (c) 2014-2023 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See http://swift.org/LICENSE.txt for license information
@@ -267,6 +267,7 @@ private func createResolvedPackages(
         
         var dependencies = OrderedCollections.OrderedDictionary<PackageIdentity, ResolvedPackageBuilder>()
         var dependenciesByNameForTargetDependencyResolution = [String: ResolvedPackageBuilder]()
+        var dependencyNamesForTargetDependencyResolutionOnly = [PackageIdentity: String]()
 
         // Establish the manifest-declared package dependencies.
         package.manifest.dependenciesRequired(for: packageBuilder.productFilter).forEach { dependency in
@@ -334,12 +335,14 @@ private func createResolvedPackages(
 
                 let nameForTargetDependencyResolution = dependency.explicitNameForTargetDependencyResolutionOnly ?? dependency.identity.description
                 dependenciesByNameForTargetDependencyResolution[nameForTargetDependencyResolution] = resolvedPackage
+                dependencyNamesForTargetDependencyResolutionOnly[resolvedPackage.package.identity] = nameForTargetDependencyResolution
 
                 dependencies[resolvedPackage.package.identity] = resolvedPackage
             }
         }
 
         packageBuilder.dependencies = Array(dependencies.values)
+        packageBuilder.dependencyNamesForTargetDependencyResolutionOnly = dependencyNamesForTargetDependencyResolutionOnly
 
         packageBuilder.defaultLocalization = package.manifest.defaultLocalization
 
@@ -441,7 +444,13 @@ private func createResolvedPackages(
 
         let productDependencyMap: [String: ResolvedProductBuilder]
         if lookupByProductIDs {
-            productDependencyMap = productDependencies.spm_createDictionary { ($0.product.identity, $0) }
+            productDependencyMap = try Dictionary(uniqueKeysWithValues: productDependencies.map {
+                guard let packageName = packageBuilder.dependencyNamesForTargetDependencyResolutionOnly[$0.packageBuilder.package.identity] else {
+                    throw InternalError("could not determine name for dependency on package '\($0.packageBuilder.package.identity)' from package '\(packageBuilder.package.identity)'")
+                }
+                let key = "\(packageName.lowercased())_\($0.product.name)"
+                return (key, $0)
+            })
         } else {
             productDependencyMap = try Dictionary(
                 productDependencies.map { ($0.product.name, $0) },
@@ -468,7 +477,7 @@ private func createResolvedPackages(
                 // Find the product in this package's dependency products.
                 // Look it up by ID if module aliasing is used, otherwise by name.
                 let product = lookupByProductIDs ? productDependencyMap[productRef.identity] : productDependencyMap[productRef.name]
-                guard let product = product else {
+                guard let product else {
                     // Only emit a diagnostic if there are no other diagnostics.
                     // This avoids flooding the diagnostics with product not
                     // found errors when there are more important errors to
@@ -505,7 +514,7 @@ private func createResolvedPackages(
                         throw InternalError("dependency reference for \(product.packageBuilder.package.manifest.packageLocation) not found")
                     }
                     let referencedPackageName = referencedPackageDependency.nameForTargetDependencyResolutionOnly
-                    if productRef.name !=  referencedPackageName {
+                    if productRef.name != referencedPackageName {
                         let error = PackageGraphError.productDependencyMissingPackage(
                             productName: productRef.name,
                             targetName: targetBuilder.target.name,
@@ -522,19 +531,87 @@ private func createResolvedPackages(
 
     // If a target with similar name was encountered before, we emit a diagnostic.
     if foundDuplicateTarget {
+        var duplicateTargets = [String: [Package]]()
         for targetName in allTargetNames.sorted() {
-            // Find the packages this target is present in.
             let packages = packageBuilders
                 .filter({ $0.targets.contains(where: { $0.target.name == targetName }) })
-                .map{ $0.package.identity.description }
-                .sorted()
+                .map{ $0.package }
             if packages.count > 1 {
-                observabilityScope.emit(ModuleError.duplicateModule(targetName, packages))
+                duplicateTargets[targetName, default: []].append(contentsOf: packages)
             }
+        }
+
+        var potentiallyDuplicatePackages = [Pair: [String]]()
+        for entry in duplicateTargets {
+            // the duplicate is across exactly two packages
+            if entry.value.count == 2 {
+                potentiallyDuplicatePackages[Pair(package1: entry.value[0], package2: entry.value[1]), default: []].append(entry.key)
+            }
+        }
+
+        var duplicateTargetsAddressed = [String]()
+        for potentiallyDuplicatePackage in potentiallyDuplicatePackages {
+            // more than three target matches, or all targets in the package match
+            if potentiallyDuplicatePackage.value.count > 3 ||
+                (potentiallyDuplicatePackage.value.sorted() == potentiallyDuplicatePackage.key.package1.targets.map({ $0.name }).sorted()
+                &&
+                potentiallyDuplicatePackage.value.sorted() == potentiallyDuplicatePackage.key.package2.targets.map({ $0.name }).sorted())
+            {
+                switch (potentiallyDuplicatePackage.key.package1.identity.registry, potentiallyDuplicatePackage.key.package2.identity.registry) {
+                case (.some(let registryIdentity), .none):
+                    observabilityScope.emit(
+                        ModuleError.duplicateModulesScmAndRegistry(
+                            regsitryPackage: registryIdentity,
+                            scmPackage: potentiallyDuplicatePackage.key.package2.identity,
+                            targets: potentiallyDuplicatePackage.value
+                        )
+                    )
+                case (.none, .some(let registryIdentity)):
+                    observabilityScope.emit(
+                        ModuleError.duplicateModulesScmAndRegistry(
+                            regsitryPackage: registryIdentity,
+                            scmPackage: potentiallyDuplicatePackage.key.package1.identity,
+                            targets: potentiallyDuplicatePackage.value
+                        )
+                    )
+                default:
+                    observabilityScope.emit(
+                        ModuleError.duplicateModules(
+                            package: potentiallyDuplicatePackage.key.package1.identity,
+                            otherPackage: potentiallyDuplicatePackage.key.package2.identity,
+                            targets: potentiallyDuplicatePackage.value
+                        )
+                    )
+                }
+                duplicateTargetsAddressed += potentiallyDuplicatePackage.value
+            }
+        }
+
+        for entry in duplicateTargets.filter({ !duplicateTargetsAddressed.contains($0.key) }) {
+            observabilityScope.emit(
+                ModuleError.duplicateModule(
+                    targetName: entry.key,
+                    packages: entry.value.map{ $0.identity })
+            )
         }
     }
 
     return try packageBuilders.map{ try $0.construct() }
+}
+
+fileprivate struct Pair: Hashable {
+    let package1: Package
+    let package2: Package
+
+    static func == (lhs: Pair, rhs: Pair) -> Bool {
+        return lhs.package1.identity == rhs.package1.identity &&
+            lhs.package2.identity == rhs.package2.identity
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(self.package1.identity)
+        hasher.combine(self.package2.identity)
+    }
 }
 
 fileprivate extension Product {
@@ -744,8 +821,8 @@ private class ResolvedBuilder<T> {
     /// Note that once the object is constructed, future calls to
     /// this method will return the same object.
     final func construct() throws -> T {
-        if let constructedObject = _constructedObject {
-            return constructedObject
+        if let _constructedObject {
+            return _constructedObject
         }
         let constructedObject = try self.constructImpl()
         _constructedObject = constructedObject
@@ -893,6 +970,9 @@ private final class ResolvedPackageBuilder: ResolvedBuilder<ResolvedPackage> {
 
     /// The dependencies of this package.
     var dependencies: [ResolvedPackageBuilder] = []
+
+    /// Map from package identity to the local name for target dependency resolution that has been given to that package through the dependency declaration.
+    var dependencyNamesForTargetDependencyResolutionOnly: [PackageIdentity: String] = [:]
 
     /// The defaultLocalization for this package.
     var defaultLocalization: String? = nil

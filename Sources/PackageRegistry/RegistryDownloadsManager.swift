@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift open source project
 //
-// Copyright (c) 2022 Apple Inc. and the Swift project authors
+// Copyright (c) 2022-2023 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See http://swift.org/LICENSE.txt for license information
@@ -26,7 +26,6 @@ public class RegistryDownloadsManager: Cancellable {
     private let path: AbsolutePath
     private let cachePath: AbsolutePath?
     private let registryClient: RegistryClient
-    private let checksumAlgorithm: HashAlgorithm
     private let delegate: Delegate?
 
     private var pendingLookups = [PackageIdentity: DispatchGroup]()
@@ -37,14 +36,12 @@ public class RegistryDownloadsManager: Cancellable {
         path: AbsolutePath,
         cachePath: AbsolutePath?,
         registryClient: RegistryClient,
-        checksumAlgorithm: HashAlgorithm,
         delegate: Delegate?
     ) {
         self.fileSystem = fileSystem
         self.path = path
         self.cachePath = cachePath
         self.registryClient = registryClient
-        self.checksumAlgorithm = checksumAlgorithm
         self.delegate = delegate
     }
 
@@ -149,7 +146,7 @@ public class RegistryDownloadsManager: Cancellable {
         callbackQueue: DispatchQueue,
         completion: @escaping (Result<FetchDetails, Error>) -> Void
     ) {
-        if let cachePath = self.cachePath {
+        if let cachePath {
             do {
                 let relativePath = try package.downloadPath(version: version)
                 let cachedPackagePath = cachePath.appending(relativePath)
@@ -174,7 +171,6 @@ public class RegistryDownloadsManager: Cancellable {
                             package: package,
                             version: version,
                             destinationPath: cachedPackagePath,
-                            checksumAlgorithm: self.checksumAlgorithm,
                             progressHandler: updateDownloadProgress,
                             fileSystem: self.fileSystem,
                             observabilityScope: observabilityScope,
@@ -202,7 +198,6 @@ public class RegistryDownloadsManager: Cancellable {
                     package: package,
                     version: version,
                     destinationPath: packagePath,
-                    checksumAlgorithm: self.checksumAlgorithm,
                     progressHandler: updateDownloadProgress,
                     fileSystem: self.fileSystem,
                     observabilityScope: observabilityScope,
@@ -219,7 +214,6 @@ public class RegistryDownloadsManager: Cancellable {
                 package: package,
                 version: version,
                 destinationPath: packagePath,
-                checksumAlgorithm: self.checksumAlgorithm,
                 progressHandler: updateDownloadProgress,
                 fileSystem: self.fileSystem,
                 observabilityScope: observabilityScope,
@@ -258,7 +252,7 @@ public class RegistryDownloadsManager: Cancellable {
     }
 
     public func purgeCache(observabilityScope: ObservabilityScope) {
-        guard let cachePath = self.cachePath else {
+        guard let cachePath else {
             return
         }
 

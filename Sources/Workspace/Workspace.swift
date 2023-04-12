@@ -640,7 +640,7 @@ public class Workspace {
 
         
         let identityResolver = customIdentityResolver ?? DefaultIdentityResolver(
-            locationMapper: mirrors.effectiveURL(for:),
+            locationMapper: mirrors.effective(for:),
             identityMapper: mirrors.effectiveIdentity(for:)
         )
         let checksumAlgorithm = customChecksumAlgorithm ?? SHA256()
@@ -685,7 +685,8 @@ public class Workspace {
             signingEntityStorage: signingEntities,
             signingEntityCheckingMode: SigningEntityCheckingMode.map(configuration.signingEntityCheckingMode),
             authorizationProvider: registryAuthorizationProvider,
-            delegate: WorkspaceRegistryClientDelegate(workspaceDelegate: delegate)
+            delegate: WorkspaceRegistryClientDelegate(workspaceDelegate: delegate),
+            checksumAlgorithm: checksumAlgorithm
         )
 
         // set default registry if not already set by configuration
@@ -698,7 +699,6 @@ public class Workspace {
             path: location.registryDownloadDirectory,
             cachePath: configuration.sharedDependenciesCacheEnabled ? location.sharedRegistryDownloadsCacheDirectory : .none,
             registryClient: registryClient,
-            checksumAlgorithm: checksumAlgorithm,
             delegate: delegate.map(WorkspaceRegistryDownloadsManagerDelegate.init(workspaceDelegate:))
         )
         // register the registry dependencies downloader with the cancellation handler
@@ -864,11 +864,11 @@ extension Workspace {
 
         // Compute the custom or extra constraint we need to impose.
         let requirement: PackageRequirement
-        if let version = version {
+        if let version {
             requirement = .versionSet(.exact(version))
-        } else if let branch = branch {
+        } else if let branch {
             requirement = .revision(branch)
-        } else if let revision = revision {
+        } else if let revision {
             requirement = .revision(revision)
         } else {
             requirement = defaultRequirement
@@ -1074,6 +1074,7 @@ extension Workspace {
         forceResolvedVersions: Bool = false,
         customXCTestMinimumDeploymentTargets: [PackageModel.Platform: PlatformVersion]? = .none,
         testEntryPointPath: AbsolutePath? = nil,
+        expectedSigningEntities: [PackageIdentity: RegistryReleaseMetadata.SigningEntity] = [:],
         observabilityScope: ObservabilityScope
     ) throws -> PackageGraph {
         // reload state in case it was modified externally (eg by another process) before reloading the graph
@@ -1104,7 +1105,7 @@ extension Workspace {
         }
 
         // Load the graph.
-        return try PackageGraph.load(
+        let packageGraph = try PackageGraph.load(
             root: manifests.root,
             identityResolver: self.identityResolver,
             additionalFileRules: self.configuration.additionalFileRules,
@@ -1119,6 +1120,57 @@ extension Workspace {
             fileSystem: fileSystem,
             observabilityScope: observabilityScope
         )
+
+        try expectedSigningEntities.forEach { identity, expectedSigningEntity in
+            if let package = packageGraph.packages.first(where: { $0.identity == identity }) {
+                if let actualSigningEntity = package.registryMetadata?.signature?.signedBy {
+                    if actualSigningEntity != expectedSigningEntity {
+                        throw SigningError.mismatchedSigningEntity(
+                            package: identity,
+                            expected: expectedSigningEntity,
+                            actual: actualSigningEntity
+                        )
+                    }
+                } else {
+                    throw SigningError.unsigned(package: identity, expected: expectedSigningEntity)
+                }
+            } else {
+                if let mirror = self.mirrors.mirror(for: identity.description) {
+                    let mirroredIdentity = PackageIdentity.plain(mirror)
+                    if mirroredIdentity.isRegistry {
+                        if let package = packageGraph.packages.first(where: { $0.identity == mirroredIdentity }) {
+                            if let actualSigningEntity = package.registryMetadata?.signature?.signedBy {
+                                if actualSigningEntity != expectedSigningEntity {
+                                    throw SigningError.mismatchedSigningEntity(
+                                        package: identity,
+                                        expected: expectedSigningEntity,
+                                        actual: actualSigningEntity
+                                    )
+                                }
+                            } else {
+                                throw SigningError.unsigned(package: identity, expected: expectedSigningEntity)
+                            }
+                        } else {
+                            // Unsure if this case is reachable in practice.
+                            throw SigningError.expectedIdentityNotFound(package: identity)
+                        }
+                    } else {
+                        throw SigningError.expectedSignedMirroredToSourceControl(package: identity, expected: expectedSigningEntity)
+                    }
+                } else {
+                    throw SigningError.expectedIdentityNotFound(package: identity)
+                }
+            }
+        }
+
+        return packageGraph
+    }
+
+    public enum SigningError: Swift.Error {
+        case expectedIdentityNotFound(package: PackageIdentity)
+        case expectedSignedMirroredToSourceControl(package: PackageIdentity, expected: RegistryReleaseMetadata.SigningEntity)
+        case mismatchedSigningEntity(package: PackageIdentity, expected: RegistryReleaseMetadata.SigningEntity, actual: RegistryReleaseMetadata.SigningEntity)
+        case unsigned(package: PackageIdentity, expected: RegistryReleaseMetadata.SigningEntity)
     }
 
     @discardableResult
@@ -1422,12 +1474,12 @@ extension Workspace {
             }
 
             // Emit warnings for branch and revision, if they're present.
-            if let checkoutBranch = checkoutBranch {
+            if let checkoutBranch {
                 observabilityScope.emit(.editBranchNotCheckedOut(
                     packageName: packageName,
                     branchName: checkoutBranch))
             }
-            if let revision = revision {
+            if let revision {
                 observabilityScope.emit(.editRevisionNotUsed(
                     packageName: packageName,
                     revisionIdentifier: revision.identifier))
@@ -1455,7 +1507,7 @@ extension Workspace {
             if let branch = checkoutBranch, repo.exists(revision: Revision(identifier: branch)) {
                 throw WorkspaceDiagnostics.BranchAlreadyExists(branch: branch)
             }
-            if let revision = revision, !repo.exists(revision: revision) {
+            if let revision, !repo.exists(revision: revision) {
                 throw WorkspaceDiagnostics.RevisionDoesNotExist(revision: revision.identifier)
             }
 
@@ -1469,7 +1521,7 @@ extension Workspace {
         }
 
         // For unmanaged dependencies, create the symlink under editables dir.
-        if let path = path {
+        if let path {
             try fileSystem.createDirectory(self.location.editsDirectory)
             // FIXME: We need this to work with InMem file system too.
             if !(fileSystem is InMemoryFileSystem) {
@@ -1558,7 +1610,7 @@ extension Workspace {
 
         // Resolve the dependencies if workspace root is provided. We do this to
         // ensure the unedited version of this dependency is resolved properly.
-        if let root = root {
+        if let root {
             try self.resolve(root: root, observabilityScope: observabilityScope)
         }
     }
@@ -1765,14 +1817,14 @@ extension Workspace {
             // FIXME: This should be an ordered set.
             requiredIdentities = inputIdentities.union(requiredIdentities)
 
-            let availableIdentities: Set<PackageReference> = Set(manifestsMap.map {
+            let availableIdentities: Set<PackageReference> = try Set(manifestsMap.map {
                 // FIXME: adding this guard to ensure refactoring is correct 9/21
                 // we only care about remoteSourceControl for this validation. it would otherwise trigger for
                 // a dependency is put into edit mode, which we want to deprecate anyways
                 if case .remoteSourceControl = $0.1.packageKind {
-                    let effectiveURL = workspace.mirrors.effectiveURL(for: $0.1.packageLocation)
+                    let effectiveURL = workspace.mirrors.effective(for: $0.1.packageLocation)
                     guard effectiveURL == $0.1.packageKind.locationString else {
-                        preconditionFailure("effective url for \($0.1.packageLocation) is \(effectiveURL), different from expected \($0.1.packageKind.locationString)")
+                        throw InternalError("effective url for \($0.1.packageLocation) is \(effectiveURL), different from expected \($0.1.packageKind.locationString)")
                     }
                 }
                 return PackageReference(identity: $0.key, kind: $0.1.packageKind)
@@ -2025,7 +2077,7 @@ extension Workspace {
             sync.enter()
             self.loadManagedManifest(for: package, observabilityScope: observabilityScope) { manifest in
                 defer { sync.leave() }
-                if let manifest = manifest {
+                if let manifest {
                     manifests[package.identity] = manifest
                 }
             }
@@ -2268,7 +2320,7 @@ extension Workspace {
                 artifactsToAdd.append(artifact)
             }
 
-            if let existingArtifact = existingArtifact, isAtArtifactsDirectory(existingArtifact) {
+            if let existingArtifact, isAtArtifactsDirectory(existingArtifact) {
                 // Remove the old extracted artifact, be it local archived or remote one.
                 artifactsToRemove.append(existingArtifact)
             }
@@ -2280,7 +2332,7 @@ extension Workspace {
                 targetName: artifact.targetName
             ]
 
-            if let existingArtifact = existingArtifact {
+            if let existingArtifact {
                 if case .remote(let existingURL, let existingChecksum) = existingArtifact.source {
                     // If we already have an artifact with the same checksum, we don't need to download it again.
                     if artifact.checksum == existingChecksum {
@@ -2921,7 +2973,7 @@ extension Workspace {
                     continue
                 }
 
-                if let currentDependency = currentDependency {
+                if let currentDependency {
                     switch currentDependency.state {
                     case .fileSystem, .edited:
                         packageStateChanges[packageRef.identity] = (packageRef, .unchanged)
@@ -2958,11 +3010,11 @@ extension Workspace {
                 }
 
                 // First check if we have this dependency.
-                if let currentDependency = currentDependency {
+                if let currentDependency {
                     // If current state and new state are equal, we don't need
                     // to do anything.
                     let newState: CheckoutState
-                    if let branch = branch {
+                    if let branch {
                         newState = .branch(name: branch, revision: revision)
                     } else {
                         newState = .revision(revision)
@@ -3525,14 +3577,6 @@ fileprivate extension PackageDependency {
     }
 }
 
-fileprivate extension DiagnosticsEngine {
-    func append(contentsOf other: DiagnosticsEngine) {
-        for diagnostic in other.diagnostics {
-            self.emit(diagnostic.message, location: diagnostic.location)
-        }
-    }
-}
-
 internal extension PackageReference {
     func makeRepositorySpecifier() throws -> RepositorySpecifier {
         switch self.kind {
@@ -3745,7 +3789,7 @@ extension FileSystem {
         }
 
         // no acceptable extensions defined, so the single top-level directory is a good candidate
-        guard let acceptableExtensions = acceptableExtensions else {
+        guard let acceptableExtensions else {
             return true
         }
 
@@ -4029,6 +4073,7 @@ extension Workspace {
                     modifiedTargets.append(
                         try TargetDescription(
                             name: target.name,
+                            group: target.group,
                             dependencies: modifiedDependencies,
                             path: target.path,
                             url: target.url,
@@ -4094,7 +4139,7 @@ extension Workspace {
                     completion(.failure(error))
                 case .success(let identities):
                     // FIXME: returns first result... need to consider how to address multiple ones
-                    let identity = identities.first
+                    let identity = identities.sorted().first
                     self.identityLookupCache[url] = (result: .success(identity), expirationTime: .now() + self.cacheTTL)
                     completion(.success(identity))
                 }
